@@ -142,7 +142,9 @@ export default {
     }
 
     const parser = new XMLParser();
-    const weixinMessage: WeixinMessage = parser.parse(await request.text());
+    const { xml: weixinMessage }: { xml: WeixinMessage } = parser.parse(
+      await request.text()
+    );
 
     ctx.waitUntil(replyUser(env, weixinMessage));
 
