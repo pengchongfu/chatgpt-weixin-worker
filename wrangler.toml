@@ -1,3 +1,14 @@
 name = "chatgpt-weixin-worker"
 main = "src/index.ts"
 compatibility_date = "2023-03-10"
+
+[[kv_namespaces]]
+binding = "KV"
+id = "<Your KV ID>"
+
+[triggers]
+crons = ["*/30 * * * *"]
+
+[vars]
+WEIXIN_APP_ID = "<Your weixin appid>"
+WEIXIN_SECRET = "<Your weixin secret>"
