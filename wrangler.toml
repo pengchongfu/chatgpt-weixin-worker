@@ -12,3 +12,4 @@ crons = ["*/30 * * * *"]
 [vars]
 WEIXIN_APP_ID = "<Your weixin appid>"
 WEIXIN_SECRET = "<Your weixin secret>"
+CHATGPT_API_KEY = "<Your chatgpt api key>"

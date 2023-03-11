@@ -4,6 +4,7 @@ export interface Env {
   KV: KVNamespace;
   WEIXIN_APP_ID: string;
   WEIXIN_SECRET: string;
+  CHATGPT_API_KEY: string;
 }
 
 type WeixinMessage = {
@@ -21,6 +22,15 @@ type WeixinMessage = {
 
 type WeixinAccessTokenResponse = {
   access_token: string;
+};
+
+type ChatGPTMessage = {
+  role: string;
+  content: string;
+};
+
+type ChatGPTResonse = {
+  choices: { message: { content: string } }[];
 };
 
 const WEIXIN_ACCESS_TOKEN_KEY = "weixin_access_token";
@@ -57,11 +67,35 @@ const sendWeixinMessage = async (
   );
 };
 
+const callChatGPT = async (env: Env, content: string) => {
+  const messages: ChatGPTMessage[] = [];
+  messages.push({ role: "system", content: "你是一个没有感情的聊天机器人" });
+  messages.push({ role: "user", content });
+
+  const resp = await fetch("https://api.openai.com/v1/chat/completions", {
+    body: JSON.stringify({
+      model: "gpt-3.5-turbo",
+      messages,
+      temperature: 1.0,
+    }),
+    method: "POST",
+    headers: {
+      "content-type": "application/json;charset=UTF-8",
+      Authorization: `Bearer ${env.CHATGPT_API_KEY}`,
+    },
+  });
+  const data: ChatGPTResonse = await resp.json();
+  return data.choices[0].message.content;
+};
+
 const replyUser = async (env: Env, weixinMessage: WeixinMessage) => {
   if (weixinMessage.MsgType !== "text") {
     await sendWeixinMessage(env, weixinMessage, "非常抱歉，目前仅支持文本消息");
     return;
   }
+
+  const content = await callChatGPT(env, weixinMessage.Content);
+  await sendWeixinMessage(env, weixinMessage, content);
 };
 
 export default {
