@@ -1,6 +1,7 @@
 import { XMLParser } from "fast-xml-parser";
 
 export interface Env {
+  D1: D1Database;
   KV: KVNamespace;
   WEIXIN_APP_ID: string;
   WEIXIN_SECRET: string;
@@ -9,6 +10,7 @@ export interface Env {
 
 type WeixinMessage = {
   FromUserName: string;
+  CreateTime: string;
   MsgType:
     | "text"
     | "image"
@@ -67,9 +69,19 @@ const sendWeixinMessage = async (
   );
 };
 
-const callChatGPT = async (env: Env, content: string) => {
+const callChatGPT = async (
+  env: Env,
+  content: string,
+  previousMessages: ChatGPTMessage[] = []
+) => {
   const messages: ChatGPTMessage[] = [];
   messages.push({ role: "system", content: "你是一个没有感情的聊天机器人" });
+  previousMessages.reverse().forEach(({ role, content }) => {
+    messages.push({
+      role,
+      content,
+    });
+  });
   messages.push({ role: "user", content });
 
   const resp = await fetch("https://api.openai.com/v1/chat/completions", {
@@ -94,7 +106,26 @@ const replyUser = async (env: Env, weixinMessage: WeixinMessage) => {
     return;
   }
 
-  const content = await callChatGPT(env, weixinMessage.Content);
+  const { results } = await env.D1.prepare(
+    "SELECT content, role FROM Messages WHERE openId = ?1 AND datetime(createdAt, 'unixepoch') >= datetime('now', '-3 minutes') ORDER BY id DESC LIMIT 6"
+  )
+    .bind(weixinMessage.FromUserName)
+    .all<ChatGPTMessage>();
+
+  const content = await callChatGPT(env, weixinMessage.Content, results);
+
+  await env.D1.prepare(
+    "INSERT INTO Messages (openId, content, role, createdAt) VALUES (?1, ?2, 'user', ?3), (?1, ?4, 'assistant', ?5)"
+  )
+    .bind(
+      weixinMessage.FromUserName,
+      weixinMessage.Content,
+      weixinMessage.CreateTime,
+      content,
+      Math.ceil(Date.now() / 1000)
+    )
+    .run();
+
   await sendWeixinMessage(env, weixinMessage, content);
 };
 

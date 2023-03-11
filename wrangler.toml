@@ -6,6 +6,11 @@ compatibility_date = "2023-03-10"
 binding = "KV"
 id = "<Your KV ID>"
 
+[[d1_databases]]
+binding = "D1"
+database_name = "chatgpt-weixin-worker"
+database_id = "<Your d1 database id>"
+
 [triggers]
 crons = ["*/30 * * * *"]
 
