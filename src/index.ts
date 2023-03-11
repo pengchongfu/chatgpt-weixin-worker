@@ -135,6 +135,12 @@ export default {
     env: Env,
     ctx: ExecutionContext
   ): Promise<Response> {
+    // 微信接口配置信息
+    if (request.method === "GET") {
+      const { searchParams } = new URL(request.url);
+      return new Response(searchParams.get("echostr"));
+    }
+
     const parser = new XMLParser();
     const weixinMessage: WeixinMessage = parser.parse(await request.text());
 
