@@ -26,4 +26,4 @@
 1. 执行 `npm run deploy` 部署 worker
 1. 到 Cloudflare dashboard 给 worker 配置自定义域名（因为如果是 Cloudflare 提供的 workers.dev 域名的话，腾讯云并不会发送消息回调）
 1. 将该自定义域名填入 微信公众平台-接口配置信息-URL 中，Token 随意填，点击提交，提示配置成功
-1. 因为配置了每 30 分钟定时更新微信 access token，所以这时未必会开始第一次执行，可临时修改 `wrangler.toml` 中的 `crons = ["*/30 * * * *"]` 为 `crons = ["*/1 * * * *"]` 并部署。成功执行第一次之后可修改回原值并再次部署
+1. 因为配置了每 30 分钟定时更新微信 access token，所以这时未必会开始第一次执行，可临时修改 `wrangler.toml` 中的 `crons = ["*/30 * * * *"]` 为 `crons = ["*/1 * * * *"]` 并部署。成功执行第一次之后可修改回原值并再次部署。 
