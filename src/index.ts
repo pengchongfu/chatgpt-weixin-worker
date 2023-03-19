@@ -8,9 +8,12 @@ export interface Env {
   CHATGPT_API_KEY: string;
 }
 
-type WeixinMessage = {
+type WeixinBaseMessage = {
   FromUserName: string;
   CreateTime: string;
+};
+
+type WeixinUserMessage = WeixinBaseMessage & {
   MsgType:
     | "text"
     | "image"
@@ -21,6 +24,13 @@ type WeixinMessage = {
     | "link";
   Content: string;
 };
+
+type WeixinEventMessage = WeixinBaseMessage & {
+  MsgType: "event";
+  Event: string;
+};
+
+type WeixinMessage = WeixinUserMessage | WeixinEventMessage;
 
 type WeixinAccessTokenResponse = {
   access_token: string;
@@ -43,6 +53,27 @@ const getWeixinAccessToken = async (env: Env) => {
   );
   const { access_token }: WeixinAccessTokenResponse = await resp.json();
   return access_token;
+};
+
+const setWeixinTyping = async (env: Env, weixinMessage: WeixinMessage) => {
+  const weixinAccessToken = await env.KV.get(WEIXIN_ACCESS_TOKEN_KEY);
+  await fetch(
+    `https://api.weixin.qq.com/cgi-bin/message/custom/typing?access_token=${weixinAccessToken}`,
+    {
+      body: JSON.stringify({
+        touser: weixinMessage.FromUserName,
+        command: "Typing",
+      }),
+      method: "POST",
+      headers: {
+        "content-type": "application/json;charset=UTF-8",
+      },
+    }
+  );
+
+  setTimeout(() => {
+    setWeixinTyping(env, weixinMessage);
+  }, 15_000);
 };
 
 const sendWeixinMessage = async (
@@ -101,10 +132,20 @@ const callChatGPT = async (
 };
 
 const replyUser = async (env: Env, weixinMessage: WeixinMessage) => {
+  if (weixinMessage.MsgType === "event") {
+    if (weixinMessage.Event === "subscribe") {
+      await sendWeixinMessage(env, weixinMessage, "感谢关注！");
+    }
+
+    return;
+  }
+
   if (weixinMessage.MsgType !== "text") {
     await sendWeixinMessage(env, weixinMessage, "非常抱歉，目前仅支持文本消息");
     return;
   }
+
+  setWeixinTyping(env, weixinMessage);
 
   const { results } = await env.D1.prepare(
     "SELECT content, role FROM Messages WHERE openId = ?1 AND datetime(createdAt, 'unixepoch') >= datetime('now', '-3 minutes') ORDER BY id DESC LIMIT 6"
