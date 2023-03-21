@@ -8,25 +8,6 @@ export interface Env {
   CHATGPT_API_KEY: string;
 }
 
-class Context {
-  env: Env;
-  weixinMessage: WeixinMessage;
-  private _weixinAccessTokenPromise: Promise<string | null> | null = null;
-
-  constructor(env: Env, weixinMessage: WeixinMessage) {
-    this.env = env;
-    this.weixinMessage = weixinMessage;
-  }
-
-  async weixinAccessToken() {
-    if (!this._weixinAccessTokenPromise) {
-      this._weixinAccessTokenPromise = this.env.KV.get(WEIXIN_ACCESS_TOKEN_KEY);
-    }
-
-    return this._weixinAccessTokenPromise;
-  }
-}
-
 type WeixinBaseMessage = {
   FromUserName: string;
   CreateTime: string;
@@ -51,26 +32,46 @@ type WeixinEventMessage = WeixinBaseMessage & {
 
 type WeixinMessage = WeixinUserMessage | WeixinEventMessage;
 
-type WeixinAccessTokenResponse = {
-  access_token: string;
-};
-
 type ChatGPTMessage = {
   role: string;
   content: string;
 };
 
-type ChatGPTResonse = {
-  choices: { message: { content: string } }[];
+type Command = {
+  func: (context: Context) => Promise<void>;
+  desc: string;
 };
 
 const WEIXIN_ACCESS_TOKEN_KEY = "weixin_access_token";
+
+class Context {
+  env: Env;
+  weixinMessage: WeixinMessage;
+  private _weixinAccessTokenPromise: Promise<string | null> | null = null;
+
+  constructor(env: Env, weixinMessage: WeixinMessage) {
+    this.env = env;
+    this.weixinMessage = weixinMessage;
+  }
+
+  async weixinAccessToken() {
+    if (!this._weixinAccessTokenPromise) {
+      this._weixinAccessTokenPromise = this.env.KV.get(WEIXIN_ACCESS_TOKEN_KEY);
+    }
+
+    return this._weixinAccessTokenPromise;
+  }
+}
 
 const getWeixinAccessToken = async (env: Env) => {
   const resp = await fetch(
     `https://api.weixin.qq.com/cgi-bin/token?grant_type=client_credential&appid=${env.WEIXIN_APP_ID}&secret=${env.WEIXIN_SECRET}`
   );
-  const { access_token }: WeixinAccessTokenResponse = await resp.json();
+  const {
+    access_token,
+  }: {
+    access_token: string;
+  } = await resp.json();
   return access_token;
 };
 
@@ -99,7 +100,7 @@ const setWeixinTyping = async (context: Context) => {
 const sendWeixinMessage = async (context: Context, content: string) => {
   const { weixinMessage } = context;
   const weixinAccessToken = await context.weixinAccessToken();
-  await fetch(
+  const resp = await fetch(
     `https://api.weixin.qq.com/cgi-bin/message/custom/send?access_token=${weixinAccessToken}`,
     {
       body: JSON.stringify({
@@ -115,6 +116,14 @@ const sendWeixinMessage = async (context: Context, content: string) => {
       },
     }
   );
+
+  const { errcode }: { errcode: number } = await resp.json();
+  if (errcode === 45002) {
+    const step = Math.min(500, Math.ceil(content.length / 2));
+    for (let i = 0; i < content.length; i += step) {
+      await sendWeixinMessage(context, content.substring(i, i + step));
+    }
+  }
 };
 
 const callChatGPT = async (
@@ -123,16 +132,11 @@ const callChatGPT = async (
   initMessage: ChatGPTMessage,
   previousMessages: ChatGPTMessage[] = []
 ) => {
-  const messages: ChatGPTMessage[] = [];
-  messages.push(initMessage);
-  previousMessages.reverse().forEach(({ role, content }) => {
-    messages.push({
-      role,
-      content,
-    });
-  });
-  messages.push({ role: "user", content });
-
+  const messages: ChatGPTMessage[] = [
+    initMessage,
+    ...previousMessages.reverse(),
+    { role: "user", content },
+  ];
   const resp = await fetch("https://api.openai.com/v1/chat/completions", {
     body: JSON.stringify({
       model: "gpt-3.5-turbo",
@@ -145,7 +149,9 @@ const callChatGPT = async (
       Authorization: `Bearer ${env.CHATGPT_API_KEY}`,
     },
   });
-  const data: ChatGPTResonse = await resp.json();
+  const data: {
+    choices: { message: { content: string } }[];
+  } = await resp.json();
   return data.choices[0].message.content;
 };
 
@@ -164,11 +170,6 @@ const commonReply = async (context: Context) => {
   }
 
   return false;
-};
-
-type Command = {
-  func: (context: Context) => Promise<void>;
-  desc: string;
 };
 
 const helpCommand: Command = {
@@ -216,11 +217,16 @@ const initCommand: Command = {
         .run();
     } catch (e) {}
 
-    await env.D1.prepare(`UPDATE UserSettings SET ${field}=?2 WHERE openId=?1`)
-      .bind(weixinMessage.FromUserName, value)
-      .run();
-
-    await sendWeixinMessage(context, "设置成功");
+    try {
+      await env.D1.prepare(
+        `UPDATE UserSettings SET ${field}=?2 WHERE openId=?1`
+      )
+        .bind(weixinMessage.FromUserName, value)
+        .run();
+      await sendWeixinMessage(context, "设置成功");
+    } catch (e) {
+      await sendWeixinMessage(context, "设置失败");
+    }
   },
   desc: `/init role <system | user>，设置初始化角色
 /init content <初始化消息>，设置初始化消息`,
@@ -229,7 +235,7 @@ const initCommand: Command = {
 const commands: Command[] = [helpCommand, initCommand];
 
 const commandReply = async (context: Context) => {
-  const { env, weixinMessage } = context;
+  const { weixinMessage } = context;
   if (weixinMessage.MsgType !== "text") return false;
 
   if (weixinMessage.Content.startsWith("/help")) {
@@ -256,7 +262,7 @@ const chatGPTReply = async (context: Context) => {
     .first<{
       role?: string;
       content?: string;
-    }>();
+    } | null>();
 
   const { results } = await env.D1.prepare(
     "SELECT content, role FROM Messages WHERE openId = ?1 AND datetime(createdAt, 'unixepoch') >= datetime('now', '-3 minutes') ORDER BY id DESC LIMIT 6"
@@ -268,8 +274,8 @@ const chatGPTReply = async (context: Context) => {
     env,
     weixinMessage.Content,
     {
-      role: initMessage.role ?? "system",
-      content: initMessage.content ?? "你是一个没有感情的聊天机器人",
+      role: initMessage?.role ?? "system",
+      content: initMessage?.content ?? "你是一个没有感情的聊天机器人",
     },
     results
   );
