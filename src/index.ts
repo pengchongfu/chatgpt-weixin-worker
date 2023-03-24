@@ -126,6 +126,25 @@ const sendWeixinMessage = async (context: Context, content: string) => {
   }
 };
 
+const sendSystemMessage = async (context: Context, content: string) => {
+  await sendWeixinMessage(
+    context,
+    `[系统消息]
+----------------
+${content}`
+  );
+};
+
+const sendChatGPTMessage = async (context: Context, content: string) => {
+  await sendWeixinMessage(context, content);
+};
+
+const sendTimedoutMessage = (context: Context) => {
+  return setTimeout(() => {
+    sendSystemMessage(context, "ChatGPT 接口有可能超时，若未回复请稍后再试");
+  }, 20_000);
+};
+
 const callChatGPT = async (
   env: Env,
   content: string,
@@ -159,13 +178,13 @@ const commonReply = async (context: Context) => {
   const { weixinMessage } = context;
   if (weixinMessage.MsgType === "event") {
     if (weixinMessage.Event === "subscribe") {
-      await sendWeixinMessage(context, "感谢关注！");
+      await sendSystemMessage(context, "感谢关注！");
     }
     return true;
   }
 
   if (weixinMessage.MsgType !== "text") {
-    await sendWeixinMessage(context, "非常抱歉，目前仅支持文本消息");
+    await sendSystemMessage(context, "非常抱歉，目前仅支持文本消息");
     return true;
   }
 
@@ -184,7 +203,7 @@ const helpCommand: Command = {
       }
     }
 
-    await sendWeixinMessage(context, commandsDesc);
+    await sendSystemMessage(context, commandsDesc);
   },
   desc: "/help，查看所有命令",
 };
@@ -205,7 +224,7 @@ const initCommand: Command = {
       field = "initMessageContent";
       value = subCommand.substring(8);
     } else {
-      await sendWeixinMessage(context, "设置失败");
+      await sendSystemMessage(context, "设置失败");
       return;
     }
 
@@ -223,9 +242,9 @@ const initCommand: Command = {
       )
         .bind(weixinMessage.FromUserName, value)
         .run();
-      await sendWeixinMessage(context, "设置成功");
+      await sendSystemMessage(context, "设置成功");
     } catch (e) {
-      await sendWeixinMessage(context, "设置失败");
+      await sendSystemMessage(context, "设置失败");
     }
   },
   desc: `/init role <system | user>，设置初始化角色
@@ -255,7 +274,7 @@ const chatGPTReply = async (context: Context) => {
   if (weixinMessage.MsgType !== "text") return false;
   setWeixinTyping(context);
 
-  const initMessage = await env.D1.prepare(
+  const initMessagePromise = env.D1.prepare(
     "SELECT initMessageRole AS role, initMessageContent AS content FROM UserSettings WHERE openId = ?1"
   )
     .bind(weixinMessage.FromUserName)
@@ -264,12 +283,16 @@ const chatGPTReply = async (context: Context) => {
       content?: string;
     } | null>();
 
-  const { results } = await env.D1.prepare(
+  const previousMessagesPromise = env.D1.prepare(
     "SELECT content, role FROM Messages WHERE openId = ?1 AND datetime(createdAt, 'unixepoch') >= datetime('now', '-3 minutes') ORDER BY id DESC LIMIT 6"
   )
     .bind(weixinMessage.FromUserName)
     .all<ChatGPTMessage>();
 
+  const initMessage = await initMessagePromise;
+  const { results: previousMessages } = await previousMessagesPromise;
+
+  const timer = sendTimedoutMessage(context);
   const content = await callChatGPT(
     env,
     weixinMessage.Content,
@@ -277,22 +300,24 @@ const chatGPTReply = async (context: Context) => {
       role: initMessage?.role ?? "system",
       content: initMessage?.content ?? "你是一个没有感情的聊天机器人",
     },
-    results
+    previousMessages
   );
+  clearTimeout(timer);
 
-  await env.D1.prepare(
-    "INSERT INTO Messages (openId, content, role, createdAt) VALUES (?1, ?2, 'user', ?3), (?1, ?4, 'assistant', ?5)"
-  )
-    .bind(
-      weixinMessage.FromUserName,
-      weixinMessage.Content,
-      weixinMessage.CreateTime,
-      content,
-      Math.ceil(Date.now() / 1000)
+  await Promise.all([
+    env.D1.prepare(
+      "INSERT INTO Messages (openId, content, role, createdAt) VALUES (?1, ?2, 'user', ?3), (?1, ?4, 'assistant', ?5)"
     )
-    .run();
-
-  await sendWeixinMessage(context, content);
+      .bind(
+        weixinMessage.FromUserName,
+        weixinMessage.Content,
+        weixinMessage.CreateTime,
+        content,
+        Math.ceil(Date.now() / 1000)
+      )
+      .run(),
+    sendChatGPTMessage(context, content),
+  ]);
   return true;
 };
 
