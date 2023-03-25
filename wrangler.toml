@@ -12,9 +12,9 @@ database_name = "chatgpt-weixin-worker"
 database_id = "<Your d1 database id>"
 
 [triggers]
-crons = ["*/30 * * * *"]
+crons = ["0 * * * *"]
 
 [vars]
 WEIXIN_APP_ID = "<Your weixin appid>"
 WEIXIN_SECRET = "<Your weixin secret>"
-CHATGPT_API_KEY = "<Your chatgpt api key>"
+OPENAI_API_KEY = "<Your chatgpt api key>"
